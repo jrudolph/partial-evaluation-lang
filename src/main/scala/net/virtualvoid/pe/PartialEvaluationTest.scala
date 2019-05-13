@@ -1,7 +1,5 @@
 package net.virtualvoid.pe
 
-import net.virtualvoid.pe.PELang.MatchStr
-
 object PELang {
   sealed trait Expr
   sealed trait Literal extends Expr
@@ -16,16 +14,20 @@ object PELang {
   final case class Cons(a1: Expr, a2: Expr) extends Expr
   final case class Car(arg: Expr) extends Expr
   final case class Cdr(arg: Expr) extends Expr
+  final case class IfThenElse(cond: Expr, thenExpr: Expr, elseExpr: Expr) extends Expr
+  final case class StringEquals(e1: Expr, e2: Expr) extends Expr
 
-  final case class MatchStr(lhs: Expr, matches: Seq[(String, Expr)], other: Expr) extends Expr
+  //final case class MatchStr(lhs: Expr, matches: Seq[(String, Expr)], other: Expr) extends Expr
 
   object DSL {
-    implicit class ExprOps(val e: Expr) extends AnyVal {
-      def +(other: Expr): Expr = Plus(e, other)
-      def apply(a1: Expr): Expr = Apply(e, a1)
-      def apply(a1: Expr, a2: Expr): Expr = e(a1)(a2)
+    implicit class ExprOps(val e1: Expr) extends AnyVal {
+      def +(e2: Expr): Expr = Plus(e1, e2)
+      def apply(a1: Expr): Expr = Apply(e1, a1)
+      def apply(a1: Expr, a2: Expr): Expr = e1(a1)(a2)
 
-      def ->(other: Expr): Expr = Cons(e, other)
+      def ->(e2: Expr): Expr = Cons(e1, e2)
+
+      def strEquals(e2: Expr): Expr = StringEquals(e1, e2)
     }
     implicit def strAsExpr(str: String): Expr = ConstantString(str)
     implicit def intAsExpr(int: Int): Expr = ConstantInt(int)
@@ -39,9 +41,16 @@ object PELang {
 
     def car(a: Expr): Expr = Car(a)
     def cdr(a: Expr): Expr = Cdr(a)
+
+    def ifThenElse(cond: Expr, thenExpr: Expr, elseExpr: Expr): Expr = IfThenElse(cond, thenExpr, elseExpr)
+    def matchStr(lhs: Expr, matches: Seq[(String, Expr)], other: Expr): Expr =
+      matches.foldRight(other) { (x, elseExpr) =>
+        val (candidate, thenExpr) = x
+        IfThenElse(StringEquals(lhs, candidate), thenExpr, elseExpr)
+      }
   }
 
-  private final case class Binding(name: String) extends Expr
+  final case class Binding(name: String) extends Expr
 
   def interpret(e: Expr): Expr = {
     val result =
@@ -70,10 +79,22 @@ object PELang {
           val Cons(_, b) = interpret(e)
           b
 
-        case MatchStr(lhs, matches, other) =>
+        case StringEquals(e1, e2) =>
+          val ConstantString(s1) = interpret(e1)
+          val ConstantString(s2) = interpret(e2)
+          ConstantInt(if (s1 == s2) 1 else 0)
+
+        case IfThenElse(condE, thenExpr, elseExpr) =>
+          val ConstantInt(cond) = interpret(condE)
+          cond match {
+            case 0 => interpret(elseExpr)
+            case 1 => interpret(thenExpr)
+          }
+
+        /*case MatchStr(lhs, matches, other) =>
           val ConstantString(str) = interpret(lhs)
           val rhs = matches.find(_._1 == str).map(_._2).getOrElse(other)
-          interpret(rhs)
+          interpret(rhs)*/
 
         case x => throw new IllegalStateException(s"Cannot interpret $x")
       }
@@ -85,17 +106,22 @@ object PELang {
     var nameCounter: Int = 0
 
     def doShow(e: Expr): String = e match {
-      case Plus(e1, e2)      => s"(${doShow(e1)} + ${doShow(e2)})"
-      case ConstantInt(i)    => i.toString
-      case ConstantString(s) => "\"" + s + "\""
-      case Apply(l, arg)     => s"(${doShow(l)})(${doShow(arg)})"
-      case Nil               => "nil"
-      case Cons(e1, e2)      => s"(${doShow(e1)} . ${doShow(e2)})"
-      case Car(a)            => s"car(${doShow(a)})"
-      case Cdr(a)            => s"cdr(${doShow(a)})"
+      case Plus(e1, e2)         => s"(${doShow(e1)} + ${doShow(e2)})"
+      case ConstantInt(i)       => i.toString
+      case ConstantString(s)    => "\"" + s + "\""
+      case Apply(l, arg)        => s"(${doShow(l)})(${doShow(arg)})"
+      case Nil                  => "nil"
+      case Cons(e1, e2)         => s"(${doShow(e1)} . ${doShow(e2)})"
+      case Car(a)               => s"car(${doShow(a)})"
+      case Cdr(a)               => s"cdr(${doShow(a)})"
 
-      case MatchStr(lhs, matches, other) =>
-        s"${doShow(lhs)} match {\n" + matches.map { case (str, e) => s""""$str" => ${doShow(e)}""" }.mkString("\n") + "}\n"
+      case StringEquals(e1, e2) => s"${doShow(e1)} == ${doShow(e2)}"
+      case IfThenElse(cond, thenExpr, elseExpr) =>
+        s"""if (${doShow(cond)})
+           |then ${doShow(thenExpr)}
+           |else ${doShow(elseExpr)}""".stripMargin
+      /*case MatchStr(lhs, matches, other) =>
+        s"${doShow(lhs)} match {\n" + matches.map { case (str, e) => s""""$str" => ${doShow(e)}""" }.mkString("\n") + "}\n"*/
 
       case Lambda(body) =>
         nameCounter += 1
@@ -129,24 +155,47 @@ object PartialEvaluationTest extends App {
   // ("cons", (e1, e2)) -> Cons
   // ("car", e) -> Car
   // ("cdr", e) -> Cdr
+  // ("strequals", (e1, e2)) -> StringEquals
+  // ("ifthenelse", (cond, (thenExpr, elseExpr))) -> IfThenElse
 
-  val interpreter = lambda { e =>
-    MatchStr(
-      car(e),
-      Seq(
-        "str" -> cdr(e),
-        "int" -> cdr(e),
-        "plus" -> (car(cdr(e)) + cdr(cdr(e))),
-        "nil" -> nil
-      ), "failed")
+  // classical strict fixed-point combinator as shown here: https://en.wikipedia.org/wiki/Fixed-point_combinator#Strict_fixed_point_combinator
+  val fix: Expr = lambda(f => lambda(x => f(lambda(v => x(x)(v))))(lambda(x => f(lambda(v => x(x)(v))))))
+  val interpreter = fix {
+    lambda { iRec =>
+      lambda { e =>
+        matchStr(
+          car(e),
+          Seq(
+            "str" -> cdr(e),
+            "int" -> cdr(e),
+            "nil" -> nil,
+            "lambda" -> cdr(e),
+            "plus" -> (iRec(car(cdr(e))) + iRec(cdr(cdr(e)))),
+            "cons" -> (iRec(car(cdr(e))) -> iRec(cdr(cdr(e)))),
+            "apply" -> iRec(iRec(car(cdr(e))).apply(iRec(cdr(cdr(e))))),
+            "car" -> car(iRec(cdr(e))),
+            "cdr" -> cdr(iRec(cdr(e))),
+            "strequals" -> (iRec(car(cdr(e))) strEquals iRec(cdr(cdr(e)))),
+            "ifthenelse" -> ifThenElse(iRec(car(cdr(e))), iRec(car(cdr(cdr(e)))), iRec(cdr(cdr(cdr(e)))))
+          ), "failed")
+      }
+    }
   }
 
   def reify(e: Expr): Expr = e match {
     case c: ConstantString => expr("str") -> c
     case i: ConstantInt    => expr("int") -> i
-    case Plus(e1, e2)      => expr("plus") -> (e1 -> e2)
+    case Plus(e1, e2)      => expr("plus") -> (reify(e1) -> reify(e2))
+    case Cons(e1, e2)      => expr("cons") -> (reify(e1) -> reify(e2))
     case Nil               => expr("nil") -> nil
+    case Apply(f, arg)     => expr("apply") -> (reify(f) -> reify(arg))
+    case Lambda(f) =>
+      expr("lambda") -> lambda(x => reify(f(x)))
+    case Binding(x) => expr("binding") -> x
   }
 
-  println(PELang.interpret(interpreter(reify(expr(23) + 42))))
+  val reifiedAppliedPlus5 = expr("apply") -> ((expr("lambda") -> lambda(x => expr("plus") -> (x -> (expr("int") -> 5)))) -> (expr("int") -> 12))
+  println(show(reifiedAppliedPlus5))
+  println(show(reify(plus5(12))))
+  println(show(PELang.interpret(interpreter(reify(plus5)))))
 }
