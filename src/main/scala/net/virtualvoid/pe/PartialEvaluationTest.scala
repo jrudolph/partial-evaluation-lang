@@ -189,13 +189,17 @@ object PartialEvaluationTest extends App {
     case Cons(e1, e2)      => expr("cons") -> (reify(e1) -> reify(e2))
     case Nil               => expr("nil") -> nil
     case Apply(f, arg)     => expr("apply") -> (reify(f) -> reify(arg))
-    case Lambda(f) =>
-      expr("lambda") -> lambda(x => reify(f(x)))
-    case Binding(x) => expr("binding") -> x
+    case Lambda(f)         => expr("lambda") -> lambda(x => reify(f(x)))
+    case Binding(x)        => expr("binding") -> x // only needed for show
   }
+
+  //def partiallyEvaluate(f: Expr, )
 
   val reifiedAppliedPlus5 = expr("apply") -> ((expr("lambda") -> lambda(x => expr("plus") -> (x -> (expr("int") -> 5)))) -> (expr("int") -> 12))
   println(show(reifiedAppliedPlus5))
   println(show(reify(plus5(12))))
+  val triplus = lambda3((x, y, z) => x + y + z)
+  println(show(interpret(lambda(x => triplus(x + 12, 38)))))
   println(show(PELang.interpret(interpreter(reify(plus5)))))
+  //println(show(PELang.interpret(interpreter(reify(plus5)))))
 }
