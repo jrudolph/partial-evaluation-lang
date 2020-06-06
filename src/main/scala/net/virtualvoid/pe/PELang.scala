@@ -76,46 +76,47 @@ object PELang {
       }
   }
 
-  def interpret(e: Expr, bindings: Map[Binding, Value] = Map.empty): Value = {
-    def rec(e: Expr): Value = interpret(e, bindings)
+  def interpret(e: Expr, bindings: Map[Binding, Value] = Map.empty, trace: Boolean = false): Value = {
+    def rec(e: Expr, bindings: Map[Binding, Value] = bindings, trace: Boolean = trace): Value = {
+      if (trace) println(s"Interpreting ${e.productPrefix} ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}]")
 
-    println(s"Interpreting ${e.productPrefix} ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}]")
+      val result: Value =
+        e match {
+          case Literal(Lambda(b, body, extra)) => Lambda(b, body, extra ++ bindings) // FIXME: replace free variables directly
+          case Literal(value)                  => value
 
-    val result: Value =
-      e match {
-        case Literal(Lambda(b, body, extra)) => Lambda(b, body, extra ++ bindings) // FIXME: replace free variables directly
-        case Literal(value)                  => value
+          case Plus(ie1, ie2)                  => IntValue(rec(ie1).asInt + rec(ie2).asInt)
 
-        case Plus(ie1, ie2)                  => IntValue(rec(ie1).asInt + rec(ie2).asInt)
+          case Apply(f, arg) =>
+            val Lambda(binding, body, extra) = rec(f).asLambda
+            val argE = rec(arg)
+            interpret(body, (bindings ++ extra) + (binding -> argE))
 
-        case Apply(f, arg) =>
-          val Lambda(binding, body, extra) = rec(f).asLambda
-          val argE = rec(arg)
-          interpret(body, (bindings ++ extra) + (binding -> argE))
+          case Cons(e1, e2)         => ConsValue(rec(e1), rec(e2))
+          case Car(e)               => rec(e).asCons.a1
+          case Cdr(e)               => rec(e).asCons.a2
 
-        case Cons(e1, e2)         => ConsValue(rec(e1), rec(e2))
-        case Car(e)               => rec(e).asCons.a1
-        case Cdr(e)               => rec(e).asCons.a2
+          case StringEquals(e1, e2) => IntValue(if (rec(e1).asString == rec(e2).asString) 1 else 0)
 
-        case StringEquals(e1, e2) => IntValue(if (rec(e1).asString == rec(e2).asString) 1 else 0)
+          case IfThenElse(condE, thenExpr, elseExpr) =>
+            rec(condE).asInt match {
+              case 0 => rec(elseExpr)
+              case 1 => rec(thenExpr)
+            }
 
-        case IfThenElse(condE, thenExpr, elseExpr) =>
-          rec(condE).asInt match {
-            case 0 => rec(elseExpr)
-            case 1 => rec(thenExpr)
-          }
+          case b: Binding => bindings(b)
 
-        case b: Binding => bindings(b)
-
-        /*case MatchStr(lhs, matches, other) =>
+          /*case MatchStr(lhs, matches, other) =>
           val ConstantString(str) = interpret(lhs)
           val rhs = matches.find(_._1 == str).map(_._2).getOrElse(other)
           interpret(rhs)*/
 
-        case x          => throw new IllegalStateException(s"Cannot interpret $x")
-      }
-    println(s"Interpreting ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}] to ${show(result)}")
-    result
+          case x          => throw new IllegalStateException(s"Cannot interpret $x")
+        }
+      if (trace) println(s"Interpreting ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}] to ${show(result)}")
+      result
+    }
+    rec(e)
   }
 
   def show(v: Value): String = v match {
@@ -203,6 +204,8 @@ object MetaPE {
   def reify(e: Expr): Value = e match {
     case Plus(e1, e2)         => value("plus") -> (reify(e1) -> reify(e2))
     case Cons(e1, e2)         => value("consF") -> (reify(e1) -> reify(e2))
+    case Car(e)               => value("car") -> reify(e)
+    case Cdr(e)               => value("cdr") -> reify(e)
     case Apply(f, arg)        => value("apply") -> (reify(f) -> reify(arg))
     case StringEquals(e1, e2) => value("strequals") -> (reify(e1) -> reify(e2))
     case Literal(v)           => reify(v)
