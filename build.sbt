@@ -2,7 +2,8 @@ val scalaV = "2.13.2"
 val scalaTestV = "3.1.2"
 
 libraryDependencies ++= Seq(
-  "org.scalatest" %% "scalatest" % scalaTestV % "test"
+  "org.scalatest" %% "scalatest" % scalaTestV % "test",
+  "org.scalatestplus" %% "scalacheck-1-14" % (scalaTestV+".0") % "test",
 )
 
 scalaVersion := scalaV

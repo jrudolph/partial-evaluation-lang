@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 object PELang {
 
-  sealed trait Value {
+  sealed trait Value extends Product {
     def asInt: Int = asInstanceOf[IntValue].int
     def asString: String = asInstanceOf[StringValue].str
     def asCons: ConsValue = asInstanceOf[ConsValue]
@@ -14,10 +14,10 @@ object PELang {
   final case class StringValue(str: String) extends Value
   final case class IntValue(int: Int) extends Value
   final case object Nil extends Value
-  final case class Lambda(binding: Binding, body: Expr) extends Value
+  final case class Lambda(binding: Binding, body: Expr, extraBindings: Map[Binding, Value] = Map.empty) extends Value
   final case class ConsValue(a1: Value, a2: Value) extends Value
 
-  sealed trait Expr
+  sealed trait Expr extends Product
   final case class Literal(value: Value) extends Expr
   final case class Apply(f: Expr, arg: Expr) extends Expr
   final case class Plus(lhs: Expr, rhs: Expr) extends Expr
@@ -79,18 +79,19 @@ object PELang {
   def interpret(e: Expr, bindings: Map[Binding, Value] = Map.empty): Value = {
     def rec(e: Expr): Value = interpret(e, bindings)
 
-    println(s"Interpreting ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}]")
+    println(s"Interpreting ${e.productPrefix} ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}]")
 
     val result: Value =
       e match {
-        case Literal(value) => value
+        case Literal(Lambda(b, body, extra)) => Lambda(b, body, extra ++ bindings) // FIXME: replace free variables directly
+        case Literal(value)                  => value
 
-        case Plus(ie1, ie2) => IntValue(rec(ie1).asInt + rec(ie2).asInt)
+        case Plus(ie1, ie2)                  => IntValue(rec(ie1).asInt + rec(ie2).asInt)
 
         case Apply(f, arg) =>
-          val Lambda(binding, body) = rec(f).asLambda
-          val argE: Value = rec(arg)
-          interpret(body, bindings + (binding -> argE))
+          val Lambda(binding, body, extra) = rec(f).asLambda
+          val argE = rec(arg)
+          interpret(body, (bindings ++ extra) + (binding -> argE))
 
         case Cons(e1, e2)         => ConsValue(rec(e1), rec(e2))
         case Car(e)               => rec(e).asCons.a1
@@ -118,11 +119,11 @@ object PELang {
   }
 
   def show(v: Value): String = v match {
-    case IntValue(i)           => i.toString
-    case StringValue(s)        => "\"" + s + "\""
-    case ConsValue(e1, e2)     => s"(${show(e1)} . ${show(e2)})"
-    case Nil                   => "nil"
-    case Lambda(binding, body) => s"${binding.name} => ${show(body)}"
+    case IntValue(i)                  => i.toString
+    case StringValue(s)               => "\"" + s + "\""
+    case ConsValue(e1, e2)            => s"(${show(e1)} . ${show(e2)})"
+    case Nil                          => "nil"
+    case Lambda(binding, body, extra) => s"${binding.name} => ${show(body)} [${extra.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}]"
   }
   def show(e: Expr): String = {
     def doShow(e: Expr): String = e match {
@@ -148,17 +149,9 @@ object PELang {
     doShow(e)
   }
 }
-
-object PartialEvaluationTest extends App {
+object MetaPE {
   import PELang._
   import PELang.DSL._
-  val plus5 = lambda(x => x + 5)
-  val plus = lambda2(_ + _)
-  //println(PELang.interpret((5: Expr) + 38))
-  //println(PELang.interpret(plus5(38)))
-  //println(PELang.interpret(plus(5, 38)))
-
-  //println(PELang.interpret(car((5: Expr) -> 32)))
 
   // Representation of expr in PELang
   // ("str", "string") -> ConstantString
@@ -186,9 +179,10 @@ object PartialEvaluationTest extends App {
             "str" -> cdr(e),
             "int" -> cdr(e),
             "nil" -> nil,
+            "consV" -> (iRec(car(cdr(e))) -> iRec(cdr(cdr(e)))),
             //"lambda" -> cdr(e),
             "plus" -> (iRec(car(cdr(e))) + iRec(cdr(cdr(e)))),
-            "cons" -> (iRec(car(cdr(e))) -> iRec(cdr(cdr(e)))),
+            "consF" -> (iRec(car(cdr(e))) -> iRec(cdr(cdr(e)))),
             "apply" -> iRec(iRec(car(cdr(e))).apply(iRec(cdr(cdr(e))))),
             "car" -> car(iRec(cdr(e))),
             "cdr" -> cdr(iRec(cdr(e))),
@@ -200,18 +194,19 @@ object PartialEvaluationTest extends App {
   }
 
   def reify(v: Value): Value = v match {
-    case c: StringValue    => value("str") -> c
-    case i: IntValue       => value("int") -> i
-    case Nil               => value("nil") -> nil
-    case Lambda(b, body)   => value("lambda") -> (value(b.name) -> reify(body))
-    case ConsValue(a1, a2) => value("cons") -> (reify(a1) -> reify(a2))
+    case c: StringValue                  => value("str") -> c
+    case i: IntValue                     => value("int") -> i
+    case Nil                             => value("nil") -> nil
+    case Lambda(b, body, m) if m.isEmpty => value("lambda") -> (value(b.name) -> reify(body))
+    case ConsValue(a1, a2)               => value("consV") -> (reify(a1) -> reify(a2))
   }
   def reify(e: Expr): Value = e match {
-    case Plus(e1, e2)  => value("plus") -> (reify(e1) -> reify(e2))
-    case Cons(e1, e2)  => value("cons") -> (reify(e1) -> reify(e2))
-    case Apply(f, arg) => value("apply") -> (reify(f) -> reify(arg))
-    case Literal(v)    => reify(v)
-    case Binding(x)    => value("binding") -> x
+    case Plus(e1, e2)         => value("plus") -> (reify(e1) -> reify(e2))
+    case Cons(e1, e2)         => value("consF") -> (reify(e1) -> reify(e2))
+    case Apply(f, arg)        => value("apply") -> (reify(f) -> reify(arg))
+    case StringEquals(e1, e2) => value("strequals") -> (reify(e1) -> reify(e2))
+    case Literal(v)           => reify(v)
+    case Binding(x)           => value("binding") -> x
   }
 
   def pe(e: Expr, bindings: Map[Binding, Value]): Expr = e match {
@@ -243,9 +238,9 @@ object PartialEvaluationTest extends App {
       }
     case Apply(f, arg) =>
       (pe(f, bindings), pe(arg, bindings)) match {
-        case (Literal(Lambda(b, body)), Literal(value)) => pe(body, bindings + ((b, value)))
+        case (Literal(Lambda(b, body, extra)), Literal(value)) => pe(body, (bindings ++ extra) + ((b, value)))
         // error on mismatch types
-        case (f, arg)                                   => Apply(f, arg)
+        case (f, arg) => Apply(f, arg)
       }
     case StringEquals(e1, e2) =>
       (pe(e1, bindings), pe(e2, bindings)) match {
@@ -260,6 +255,20 @@ object PartialEvaluationTest extends App {
         case c                    => IfThenElse(c, pe(thenExpr, bindings), pe(elseExpr, bindings))
       }
   }
+}
+
+object PartialEvaluationTest extends App {
+  import PELang._
+  import PELang.DSL._
+  import MetaPE._
+  val plus5 = lambda(x => x + 5)
+  val plus = lambda2(_ + _)
+  //println(PELang.interpret((5: Expr) + 38))
+  //println(PELang.interpret(plus5(38)))
+  //println(PELang.interpret(plus(5, 38)))
+
+  //println(PELang.interpret(car((5: Expr) -> 32)))
+
   //val metaPe = lambda
 
   //def partiallyEvaluate(f: Expr, )
