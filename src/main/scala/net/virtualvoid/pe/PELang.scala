@@ -216,51 +216,61 @@ object MetaPE {
     case Binding(x)           => value("binding") -> x
   }
 
-  def pe(e: Expr, bindings: Map[Binding, Value]): Expr = e match {
-    case Literal(l) => l
-    case b: Binding => bindings.get(b).fold[Expr](b)(Literal)
-    case Plus(e1, e2) =>
-      (pe(e1, bindings), pe(e2, bindings)) match {
-        case (Literal(IntValue(i1)), Literal(IntValue(i2))) => expr(i1) + i2
-        // error on mismatch types
-        // add optimizations by int rules (like `x + 0` etc)
-        case (e1, e2)                                       => Plus(e1, e2)
-      }
-    case Cons(e1, e2) =>
-      (pe(e1, bindings), pe(e2, bindings)) match {
-        case (Literal(v1), Literal(v2)) => Literal(ConsValue(v1, v2))
-        case (e1, e2)                   => Cons(e1, e2)
-      }
-    case Car(e) =>
-      pe(e, bindings) match {
-        case Literal(ConsValue(a1, _)) => Literal(a1)
-        // error on mismatch types
-        case x                         => Car(x)
-      }
-    case Cdr(e) =>
-      pe(e, bindings) match {
-        case Literal(ConsValue(_, a2)) => Literal(a2)
-        // error on mismatch types
-        case x                         => Cdr(x)
-      }
-    case Apply(f, arg) =>
-      (pe(f, bindings), pe(arg, bindings)) match {
-        case (Literal(Lambda(b, body, extra)), Literal(value)) => pe(body, (bindings ++ extra) + ((b, value)))
-        // error on mismatch types
-        case (f, arg) => Apply(f, arg)
-      }
-    case StringEquals(e1, e2) =>
-      (pe(e1, bindings), pe(e2, bindings)) match {
-        case (Literal(StringValue(str1)), Literal(StringValue(str2))) => if (str1 == str2) Literal(1) else Literal(0)
-        // error on mismatch types
-        case (e1, e2) => StringEquals(e1, e2)
-      }
-    case IfThenElse(cond, thenExpr, elseExpr) =>
+  def pe(e: Expr): Expr = {
+    def pe(e: Expr, bindings: Map[Binding, Value] = Map.empty): Expr = {
+      val result: Expr =
+        e match {
+          case Literal(Lambda(b, body, extra)) => Literal(PELang.Lambda(b, body, bindings ++ extra))
+          case Literal(l)                      => l
+          case b: Binding                      => bindings.get(b).fold[Expr](b)(Literal)
+          case Plus(e1, e2) =>
+            (pe(e1, bindings), pe(e2, bindings)) match {
+              case (Literal(IntValue(i1)), Literal(IntValue(i2))) => expr(i1 + i2)
+              // error on mismatch types
+              // add optimizations by int rules (like `x + 0` etc)
+              case (e1, e2)                                       => Plus(e1, e2)
+            }
+          case Cons(e1, e2) =>
+            (pe(e1, bindings), pe(e2, bindings)) match {
+              case (Literal(v1), Literal(v2)) => Literal(ConsValue(v1, v2))
+              case (e1, e2)                   => Cons(e1, e2)
+            }
+          case Car(e) =>
+            pe(e, bindings) match {
+              case Literal(ConsValue(a1, _)) => Literal(a1)
+              // error on mismatch types
+              case x                         => Car(x)
+            }
+          case Cdr(e) =>
+            pe(e, bindings) match {
+              case Literal(ConsValue(_, a2)) => Literal(a2)
+              // error on mismatch types
+              case x                         => Cdr(x)
+            }
+          case Apply(f, arg) =>
+            (pe(f, bindings), pe(arg, bindings)) match {
+              case (Literal(Lambda(b, body, extra)), Literal(value)) => pe(body, (bindings ++ extra) + ((b, value)))
+              // error on mismatch types
+              case (f, arg) => Apply(f, arg)
+            }
+          case StringEquals(e1, e2) =>
+            (pe(e1, bindings), pe(e2, bindings)) match {
+              case (Literal(StringValue(str1)), Literal(StringValue(str2))) => if (str1 == str2) Literal(1) else Literal(0)
+              // error on mismatch types
+              case (e1, e2) => StringEquals(e1, e2)
+            }
+          case IfThenElse(cond, thenExpr, elseExpr) =>
+            pe(cond, bindings) match {
+              case Literal(IntValue(1)) => pe(thenExpr, bindings)
+              case Literal(IntValue(0)) => pe(elseExpr, bindings)
+              case c                    => IfThenElse(c, pe(thenExpr, bindings), pe(elseExpr, bindings))
+            }
+        }
 
-      pe(cond, bindings) match {
-        case Literal(IntValue(1)) => pe(thenExpr, bindings)
-        case Literal(IntValue(0)) => pe(elseExpr, bindings)
-        case c                    => IfThenElse(c, pe(thenExpr, bindings), pe(elseExpr, bindings))
-      }
+      //println(s"PE ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}] to ${show(result)}")
+      result
+    }
+
+    pe(e)
   }
 }

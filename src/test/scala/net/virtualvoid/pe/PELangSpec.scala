@@ -154,5 +154,15 @@ class PELangSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers
 
       check(lambda(x => x + 5)(12))
     }
+
+    "compile by using pe" in {
+      val expr = lambda(x => x + 5)(28)
+      val reified = MetaPE.reify(expr)
+      println(show(reified))
+      println(show(interpret(MetaPE.interpreter(reified))))
+      println(show(MetaPE.pe(MetaPE.interpreter(reified))))
+      println(show(interpret(MetaPE.pe(MetaPE.interpreter(reified)))))
+      //println(show(MetaPE.pe(expr)))
+    }
   }
 }
