@@ -3,16 +3,22 @@ package net.virtualvoid.pe
 import java.util.concurrent.atomic.AtomicLong
 
 object PELang {
+
+  sealed trait Value {
+    def asInt: Int = asInstanceOf[IntValue].int
+    def asString: String = asInstanceOf[StringValue].str
+    def asCons: ConsValue = asInstanceOf[ConsValue]
+    def isNil: Boolean = this eq Nil
+    def asLambda: Lambda = asInstanceOf[Lambda]
+  }
+  final case class StringValue(str: String) extends Value
+  final case class IntValue(int: Int) extends Value
+  final case object Nil extends Value
+  final case class Lambda(binding: Binding, body: Expr) extends Value
+  final case class ConsValue(a1: Value, a2: Value) extends Value
+
   sealed trait Expr
-  sealed trait Literal extends Expr
-
-  final case class ConstantString(str: String) extends Literal
-  final case class ConstantInt(int: Int) extends Literal
-  final case object Nil extends Literal
-  //final case class Lambda(body: Expr => Expr) extends Literal
-  final case class Lambda(binding: Binding, body: Expr) extends Literal
-  final case class ConsLiteral(a1: Literal, a2: Literal) extends Literal
-
+  final case class Literal(value: Value) extends Expr
   final case class Apply(f: Expr, arg: Expr) extends Expr
   final case class Plus(lhs: Expr, rhs: Expr) extends Expr
   final case class Cons(a1: Expr, a2: Expr) extends Expr
@@ -34,11 +40,19 @@ object PELang {
 
       def strEquals(e2: Expr): Expr = StringEquals(e1, e2)
     }
-    implicit def strAsExpr(str: String): Expr = ConstantString(str)
-    implicit def intAsExpr(int: Int): Expr = ConstantInt(int)
+    implicit class ValueOps(val v1: Value) extends AnyVal {
+      def ->(v2: Value): Value = ConsValue(v1, v2)
+    }
+    implicit def valueAsLiteral(value: Value): Expr = Literal(value)
+    implicit def strAsExpr(str: String): Expr = StringValue(str)
+    implicit def intAsExpr(int: Int): Expr = IntValue(int)
 
+    implicit def strAsValue(str: String): Value = StringValue(str)
+    implicit def Value(int: Int): Value = IntValue(int)
+
+    def value(v: Value): Value = v
     def expr(e: Expr): Expr = e
-    def nil: Expr = Nil
+    def nil: Value = Nil
 
     private val varCounter = new AtomicLong()
     private def binding(): Binding = Binding(s"x_${varCounter.incrementAndGet()}")
@@ -62,44 +76,30 @@ object PELang {
       }
   }
 
-  def interpret(e: Expr, bindings: Map[Binding, Literal] = Map.empty): Literal = {
-    def rec(e: Expr): Literal = interpret(e, bindings)
+  def interpret(e: Expr, bindings: Map[Binding, Value] = Map.empty): Value = {
+    def rec(e: Expr): Value = interpret(e, bindings)
 
     println(s"Interpreting ${show(e)} with bindings [${bindings.map(b => s"${b._1.name} -> ${show(b._2)}").mkString(", ")}]")
 
-    val result: Literal =
+    val result: Value =
       e match {
-        case l: Literal => l
+        case Literal(value) => value
 
-        case Plus(ie1, ie2) =>
-          val ConstantInt(i1) = rec(ie1)
-          val ConstantInt(i2) = rec(ie2)
-
-          ConstantInt(i1 + i2)
+        case Plus(ie1, ie2) => IntValue(rec(ie1).asInt + rec(ie2).asInt)
 
         case Apply(f, arg) =>
-          val Lambda(binding, body) = rec(f)
-          val argE: Literal = rec(arg).asInstanceOf[Literal]
+          val Lambda(binding, body) = rec(f).asLambda
+          val argE: Value = rec(arg)
           interpret(body, bindings + (binding -> argE))
 
-        case Cons(e1, e2) =>
-          ConsLiteral(rec(e1), rec(e2))
+        case Cons(e1, e2)         => ConsValue(rec(e1), rec(e2))
+        case Car(e)               => rec(e).asCons.a1
+        case Cdr(e)               => rec(e).asCons.a2
 
-        case Car(e) =>
-          val ConsLiteral(a, _) = rec(e)
-          a
-        case Cdr(e) =>
-          val ConsLiteral(_, b) = rec(e)
-          b
-
-        case StringEquals(e1, e2) =>
-          val ConstantString(s1) = rec(e1)
-          val ConstantString(s2) = rec(e2)
-          ConstantInt(if (s1 == s2) 1 else 0)
+        case StringEquals(e1, e2) => IntValue(if (rec(e1).asString == rec(e2).asString) 1 else 0)
 
         case IfThenElse(condE, thenExpr, elseExpr) =>
-          val ConstantInt(cond) = rec(condE)
-          cond match {
+          rec(condE).asInt match {
             case 0 => rec(elseExpr)
             case 1 => rec(thenExpr)
           }
@@ -117,14 +117,19 @@ object PELang {
     result
   }
 
+  def show(v: Value): String = v match {
+    case IntValue(i)           => i.toString
+    case StringValue(s)        => "\"" + s + "\""
+    case ConsValue(e1, e2)     => s"(${show(e1)} . ${show(e2)})"
+    case Nil                   => "nil"
+    case Lambda(binding, body) => s"${binding.name} => ${show(body)}"
+  }
   def show(e: Expr): String = {
     def doShow(e: Expr): String = e match {
       case Plus(e1, e2)         => s"(${doShow(e1)} + ${doShow(e2)})"
-      case ConstantInt(i)       => i.toString
-      case ConstantString(s)    => "\"" + s + "\""
-      case ConsLiteral(e1, e2)  => s"(${doShow(e1)} . ${doShow(e2)})"
+
       case Apply(l, arg)        => s"(${doShow(l)})(${doShow(arg)})"
-      case Nil                  => "nil"
+
       case Cons(e1, e2)         => s"(${doShow(e1)} . ${doShow(e2)})"
       case Car(a)               => s"car(${doShow(a)})"
       case Cdr(a)               => s"cdr(${doShow(a)})"
@@ -137,8 +142,8 @@ object PELang {
       /*case MatchStr(lhs, matches, other) =>
         s"${doShow(lhs)} match {\n" + matches.map { case (str, e) => s""""$str" => ${doShow(e)}""" }.mkString("\n") + "}\n"*/
 
-      case Lambda(binding, body) => s"${binding.name} => ${doShow(body)}"
-      case Binding(n)            => n
+      case Binding(n) => n
+      case Literal(v) => show(v)
     }
     doShow(e)
   }
@@ -194,15 +199,19 @@ object PartialEvaluationTest extends App {
     }
   }
 
-  def reify(e: Expr): Expr = e match {
-    case c: ConstantString => expr("str") -> c
-    case i: ConstantInt    => expr("int") -> i
-    case Plus(e1, e2)      => expr("plus") -> (reify(e1) -> reify(e2))
-    case Cons(e1, e2)      => expr("cons") -> (reify(e1) -> reify(e2))
-    case Nil               => expr("nil") -> nil
-    case Apply(f, arg)     => expr("apply") -> (reify(f) -> reify(arg))
-    case Lambda(b, body)   => expr("lambda") -> (expr(b.name) -> reify(body))
-    case Binding(x)        => expr("binding") -> x
+  def reify(v: Value): Value = v match {
+    case c: StringValue    => value("str") -> c
+    case i: IntValue       => value("int") -> i
+    case Nil               => value("nil") -> nil
+    case Lambda(b, body)   => value("lambda") -> (value(b.name) -> reify(body))
+    case ConsValue(a1, a2) => value("cons") -> (reify(a1) -> reify(a2))
+  }
+  def reify(e: Expr): Value = e match {
+    case Plus(e1, e2)  => value("plus") -> (reify(e1) -> reify(e2))
+    case Cons(e1, e2)  => value("cons") -> (reify(e1) -> reify(e2))
+    case Apply(f, arg) => value("apply") -> (reify(f) -> reify(arg))
+    case Literal(v)    => reify(v)
+    case Binding(x)    => value("binding") -> x
   }
 
   def pe(f: Expr, x: Expr): Expr = ???
