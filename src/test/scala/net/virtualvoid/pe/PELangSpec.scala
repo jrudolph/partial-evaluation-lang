@@ -149,5 +149,10 @@ class PELangSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers
         interpret(MetaPE.interpreter(MetaPE.reify(expr))) mustEqual interpret(expr)
       }
     }
+    "support lambda" in {
+      def check(expr: Expr): Unit = interpret(MetaPE.interpreter(MetaPE.reify(expr))) mustEqual interpret(expr)
+
+      check(lambda(x => x + 5)(12))
+    }
   }
 }

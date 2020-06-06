@@ -9,7 +9,10 @@ object PELang {
     def asString: String = asInstanceOf[StringValue].str
     def asCons: ConsValue = asInstanceOf[ConsValue]
     def isNil: Boolean = this eq Nil
-    def asLambda: Lambda = asInstanceOf[Lambda]
+    def asLambda: Lambda = this match {
+      case l: Lambda => l
+      case x         => throw new IllegalArgumentException(s"Expected lambda but found [$x] (${x.productPrefix})")
+    }
   }
   final case class StringValue(str: String) extends Value
   final case class IntValue(int: Int) extends Value
@@ -181,25 +184,25 @@ object MetaPE {
             "int" -> cdr(e),
             "nil" -> nil,
             "consV" -> (iRec(car(cdr(e))) -> iRec(cdr(cdr(e)))),
-            //"lambda" -> cdr(e),
+            "lambda" -> cdr(e),
             "plus" -> (iRec(car(cdr(e))) + iRec(cdr(cdr(e)))),
             "consF" -> (iRec(car(cdr(e))) -> iRec(cdr(cdr(e)))),
-            "apply" -> iRec(iRec(car(cdr(e))).apply(iRec(cdr(cdr(e))))),
+            "apply" -> iRec(car(cdr(e))).apply(iRec(cdr(cdr(e)))),
             "car" -> car(iRec(cdr(e))),
             "cdr" -> cdr(iRec(cdr(e))),
             "strequals" -> (iRec(car(cdr(e))) strEquals iRec(cdr(cdr(e)))),
             "ifthenelse" -> ifThenElse(iRec(car(cdr(e))), iRec(car(cdr(cdr(e)))), iRec(cdr(cdr(cdr(e)))))
-          ), "failed")
+          ), expr("failed to interpret") -> e)
       }
     }
   }
 
   def reify(v: Value): Value = v match {
-    case c: StringValue                  => value("str") -> c
-    case i: IntValue                     => value("int") -> i
-    case Nil                             => value("nil") -> nil
-    case Lambda(b, body, m) if m.isEmpty => value("lambda") -> (value(b.name) -> reify(body))
-    case ConsValue(a1, a2)               => value("consV") -> (reify(a1) -> reify(a2))
+    case c: StringValue    => value("str") -> c
+    case i: IntValue       => value("int") -> i
+    case Nil               => value("nil") -> nil
+    case l: Lambda         => value("lambda") -> l // FIXME: it's a bit lazy to represent lambdas non-explicitly, will it bite us later, though?
+    case ConsValue(a1, a2) => value("consV") -> (reify(a1) -> reify(a2))
   }
   def reify(e: Expr): Value = e match {
     case Plus(e1, e2)         => value("plus") -> (reify(e1) -> reify(e2))
