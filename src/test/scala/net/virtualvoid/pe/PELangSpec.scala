@@ -137,7 +137,6 @@ class PELangSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers
     "evaluate cons literals to themselves" in {
       val lit = ConsValue(Nil, Nil)
       val reified = MetaPE.reify(lit)
-      println(show(reified))
       interpret(MetaPE.interpreter(reified)) mustEqual ConsValue(Nil, Nil)
     }
     "evaluate literals to themselves" in {

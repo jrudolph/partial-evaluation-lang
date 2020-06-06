@@ -208,6 +208,7 @@ object MetaPE {
     case Cdr(e)               => value("cdr") -> reify(e)
     case Apply(f, arg)        => value("apply") -> (reify(f) -> reify(arg))
     case StringEquals(e1, e2) => value("strequals") -> (reify(e1) -> reify(e2))
+    case IfThenElse(c, t, e)  => value("ifthenelse") -> (reify(c) -> (reify(t) -> reify(e)))
     case Literal(v)           => reify(v)
     case Binding(x)           => value("binding") -> x
   }
@@ -252,6 +253,7 @@ object MetaPE {
         case (e1, e2) => StringEquals(e1, e2)
       }
     case IfThenElse(cond, thenExpr, elseExpr) =>
+
       pe(cond, bindings) match {
         case Literal(IntValue(1)) => pe(thenExpr, bindings)
         case Literal(IntValue(0)) => pe(elseExpr, bindings)
